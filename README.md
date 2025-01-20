@@ -2,23 +2,30 @@
 
 Code Organization 
 
+  
 network_monitor/
 ├── config/
-│   └── config.json        # Configuration file
+│   └── config.json                             # Configuration file
 ├── logs/
-│   └── monitor.log        # Log files
+│   └── monitor.log                                # Log files
 ├── src/
-│   ├── main.py            # Main controller
-│   ├── config.py          # Configuration loader
-│   ├── packet_capture.py  # Packet capture module
-│   ├── traffic_analysis.py # Traffic analysis module
-│   ├── data_storage.py    # Data storage module
-│   ├── visualization.py   # Visualization module
-│   ├── alerting.py        # Alerting module
+│   ├── main.py                                       # Main controller
+│   ├── config.py             # Configuration loader
+│   ├── packet_capture.py     # Packet capture module
+│   ├── traffic_analysis.py   # Traffic analysis module
+│   ├── data_storage.py       # Data storage module
+│   ├── visualization.py      # Visualization module
+│   ├── alerting.py           # Alerting module
+│   ├── web_dashboard.py      # Web dashboard module
+│   └── static/               # Static files (CSS, JS)
+│       └── style.css         # Dashboard styling
+│   └── templates/            # HTML templates
+│       └── dashboard.html    # Dashboard page
 ├── reports/
-│   └── report_YYYYMMDD.pdf # Exported reports
-├── requirements.txt       # Python dependencies
-└── README.md              # Documentation  
+│   └── report_YYYYMMDD.pdf   # Exported reports
+├── requirements.txt          # Python dependencies
+└── README.md                 # Documentation
+
 
 the key features:
 
