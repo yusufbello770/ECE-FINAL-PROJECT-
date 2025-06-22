@@ -1,56 +1,47 @@
-import os
 import argparse
 import logging
-import pandas as pd
+from db import get_top_ips, get_packet_count
 
-def detect_anomalies(log_file: str, threshold: int):
+def detect_anomalies(threshold: int):
     """
-    Reads the CSV file and detects anomalies by checking if any source IP
-    has sent more than 'threshold' packets.
+    Detects anomalies by checking if any source IP has sent more than 'threshold' packets.
 
     Parameters:
-        log_file (str): Path to the CSV file containing packet logs.
         threshold (int): Packet count threshold to flag anomalies.
 
     Returns:
-        None; prints the anomalies found.
+        list: List of anomalies found
     """
     try:
-        # Use pandas to efficiently read the CSV file
-        df = pd.read_csv(log_file)
+        # Get top source IPs
+        top_src_ips, _ = get_top_ips(limit=100)  # Get more IPs to check against threshold
+        
+        anomalies = []
+        for ip, count in top_src_ips:
+            if count > threshold:
+                anomalies.append((ip, count))
+        
+        return anomalies
+        
     except Exception as e:
-        logging.error("Failed to read CSV file '%s': %s", log_file, e)
-        return
+        logging.error("Failed to detect anomalies: %s", e)
+        return []
 
-    # Check if the dataframe is empty
-    if df.empty:
-        logging.warning("The CSV file '%s' is empty. No data to analyze.", log_file)
-        return
-
-    required_columns = {"timestamp", "src_ip", "dst_ip", "protocol", "length"}
-    if not required_columns.issubset(df.columns):
-        logging.error("CSV file '%s' is missing required columns. Expected columns: %s", 
-                      log_file, required_columns)
-        return
-    
-    ip_counts = df.groupby("src_ip").size()
-    anomalies = ip_counts[ip_counts > threshold]
-
-    if anomalies.empty:
+def print_anomalies(anomalies, threshold):
+    """
+    Print the detected anomalies.
+    """
+    if not anomalies:
         print("No anomalies detected.")
     else:
-        print("Anomalies detected:")
-        for ip, count in anomalies.items():
-            print(f"  - IP {ip} has {count} packets (threshold: {threshold})")
+        print(f"Anomalies detected (threshold: {threshold} packets):")
+        for ip, count in anomalies:
+            print(f"  - IP {ip} has {count} packets")
 
 def main():
     # Set up command-line argument parsing
     parser = argparse.ArgumentParser(
         description="Anomaly detection for network packet logs."
-    )
-    parser.add_argument(
-        "--log_file", type=str, default="packets_log.csv",
-        help="Path to the packet log CSV file (default: packets_log.csv)"
     )
     parser.add_argument(
         "--threshold", type=int, default=100,
@@ -61,18 +52,22 @@ def main():
         help="Logging level (DEBUG, INFO, WARNING, ERROR; default: INFO)"
     )
     args = parser.parse_args()
+    
     numeric_level = getattr(logging, args.log_level.upper(), None)
     if not isinstance(numeric_level, int):
         numeric_level = logging.INFO
     logging.basicConfig(level=numeric_level,
                         format='%(asctime)s - %(levelname)s - %(message)s')
 
-    if not os.path.exists(args.log_file):
-        logging.error("CSV file '%s' does not exist.", args.log_file)
+    # Check if database has data
+    packet_count = get_packet_count()
+    if packet_count == 0:
+        logging.warning("No packets found in the database.")
         return
 
     # Run anomaly detection
-    detect_anomalies(args.log_file, args.threshold)
+    anomalies = detect_anomalies(args.threshold)
+    print_anomalies(anomalies, args.threshold)
 
 if __name__ == "__main__":
     main()

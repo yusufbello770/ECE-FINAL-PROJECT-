@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Visualizations</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1400px;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin: 20px 0;
+        }
+        .chart-card {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            background-color: #fff;
+        }
+        .chart-title {
+            color: #495057;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Network Visualizations</h1>
+            <div>
+                <a href="/" class="btn btn-primary">Interface Selection</a>
+                <a href="/capture" class="btn btn-secondary">View Packets</a>
+                <a href="/dashboard" class="btn btn-info">Dashboard</a>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Protocol Distribution -->
+            <div class="col-md-6">
+                <div class="chart-card">
+                    <h4 class="chart-title">Protocol Distribution</h4>
+                    <div class="chart-container">
+                        <canvas id="protocolChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Source IPs -->
+            <div class="col-md-6">
+                <div class="chart-card">
+                    <h4 class="chart-title">Top Source IP Addresses</h4>
+                    <div class="chart-container">
+                        <canvas id="sourceIPChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Top Destination IPs -->
+            <div class="col-md-6">
+                <div class="chart-card">
+                    <h4 class="chart-title">Top Destination IP Addresses</h4>
+                    <div class="chart-container">
+                        <canvas id="destIPChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Protocol Comparison -->
+            <div class="col-md-6">
+                <div class="chart-card">
+                    <h4 class="chart-title">Protocol Comparison</h4>
+                    <div class="chart-container">
+                        <canvas id="protocolComparisonChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Chart Controls</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3">
+                                <label for="ipLimit" class="form-label">IP Limit:</label>
+                                <select class="form-select" id="ipLimit" onchange="updateCharts()">
+                                    <option value="5">Top 5</option>
+                                    <option value="10" selected>Top 10</option>
+                                    <option value="15">Top 15</option>
+                                    <option value="20">Top 20</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="chartType" class="form-label">Chart Type:</label>
+                                <select class="form-select" id="chartType" onchange="updateChartTypes()">
+                                    <option value="bar">Bar Chart</option>
+                                    <option value="pie">Pie Chart</option>
+                                    <option value="doughnut">Doughnut Chart</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <button class="btn btn-primary mt-4" onclick="refreshData()">Refresh Data</button>
+                            </div>
+                            <div class="col-md-3">
+                                <button class="btn btn-success mt-4" onclick="exportCharts()">Export Charts</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let protocolChart, sourceIPChart, destIPChart, protocolComparisonChart;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadAllCharts();
+        });
+
+        function loadAllCharts() {
+            loadProtocolData();
+            loadIPData();
+        }
+
+        function loadProtocolData() {
+            fetch('/api/protocol-data')
+                .then(response => response.json())
+                .then(data => {
+                    createProtocolChart(data.protocols, data.counts);
+                    createProtocolComparisonChart(data.protocols, data.counts);
+                })
+                .catch(error => console.error('Error loading protocol data:', error));
+        }
+
+        function loadIPData() {
+            const limit = document.getElementById('ipLimit').value;
+            fetch(`/api/ip-data?limit=${limit}`)
+                .then(response => response.json())
+                .then(data => {
+                    createSourceIPChart(data.source_ips);
+                    createDestIPChart(data.destination_ips);
+                })
+                .catch(error => console.error('Error loading IP data:', error));
+        }
+
+        function createProtocolChart(protocols, counts) {
+            const ctx = document.getElementById('protocolChart').getContext('2d');
+            if (protocolChart) protocolChart.destroy();
+            
+            protocolChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: protocols,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: [
+                            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+                            '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#FF6384'
+                        ],
+                        borderWidth: 2,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const percentage = ((context.parsed / total) * 100).toFixed(1);
+                                    return `${context.label}: ${context.parsed} (${percentage}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function createSourceIPChart(sourceIPs) {
+            const ctx = document.getElementById('sourceIPChart').getContext('2d');
+            if (sourceIPChart) sourceIPChart.destroy();
+            
+            const labels = sourceIPs.map(item => item.ip);
+            const counts = sourceIPs.map(item => item.count);
+            
+            sourceIPChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Packet Count',
+                        data: counts,
+                        backgroundColor: 'rgba(255, 99, 132, 0.8)',
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+
+        function createDestIPChart(destIPs) {
+            const ctx = document.getElementById('destIPChart').getContext('2d');
+            if (destIPChart) destIPChart.destroy();
+            
+            const labels = destIPs.map(item => item.ip);
+            const counts = destIPs.map(item => item.count);
+            
+            destIPChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Packet Count',
+                        data: counts,
+                        backgroundColor: 'rgba(75, 192, 192, 0.8)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+
+        function createProtocolComparisonChart(protocols, counts) {
+            const ctx = document.getElementById('protocolComparisonChart').getContext('2d');
+            if (protocolComparisonChart) protocolComparisonChart.destroy();
+            
+            protocolComparisonChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: protocols,
+                    datasets: [{
+                        label: 'Packets',
+                        data: counts,
+                        backgroundColor: 'rgba(54, 162, 235, 0.8)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateCharts() {
+            loadIPData();
+        }
+
+        function updateChartTypes() {
+            const chartType = document.getElementById('chartType').value;
+            
+            // Update protocol chart
+            if (protocolChart) {
+                protocolChart.config.type = chartType;
+                protocolChart.update();
+            }
+            
+            // Update IP charts
+            if (sourceIPChart) {
+                sourceIPChart.config.type = chartType;
+                sourceIPChart.update();
+            }
+            
+            if (destIPChart) {
+                destIPChart.config.type = chartType;
+                destIPChart.update();
+            }
+        }
+
+        function refreshData() {
+            loadAllCharts();
+        }
+
+        function exportCharts() {
+            // Export charts as images
+            const charts = [protocolChart, sourceIPChart, destIPChart, protocolComparisonChart];
+            charts.forEach((chart, index) => {
+                if (chart) {
+                    const link = document.createElement('a');
+                    link.download = `chart_${index + 1}.png`;
+                    link.href = chart.toBase64Image();
+                    link.click();
+                }
+            });
+        }
+
+        // Auto-refresh every 60 seconds
+        setInterval(() => {
+            refreshData();
+        }, 60000);
+    </script>
+</body>
+</html> 

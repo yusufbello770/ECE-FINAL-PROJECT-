@@ -21,16 +21,76 @@
         .table-responsive {
             margin-top: 20px;
         }
+        .nav-buttons {
+            margin-bottom: 20px;
+        }
+        .nav-buttons .btn {
+            margin-right: 10px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-active {
+            background-color: #28a745;
+            animation: pulse 2s infinite;
+        }
+        .status-inactive {
+            background-color: #dc3545;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .control-panel {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>Captured Packets</h1>
-            <a href="/" class="btn btn-primary">Back to Interface Selection</a>
+            <div class="nav-buttons">
+                <a href="/" class="btn btn-primary">Interface Selection</a>
+                <a href="/dashboard" class="btn btn-info">Dashboard</a>
+                <a href="/visualizations" class="btn btn-success">Visualizations</a>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <h5 class="mb-0">
+                        <span class="status-indicator" id="statusIndicator"></span>
+                        <span id="statusText">Checking status...</span>
+                    </h5>
+                    <small id="statusDetails" class="text-muted"></small>
+                </div>
+                <div class="col-md-6 text-end">
+                    <button class="btn btn-success" id="startBtn" onclick="startSniffing()" style="display: none;">
+                        <i class="bi bi-play-circle"></i> Start Capture
+                    </button>
+                    <button class="btn btn-danger" id="stopBtn" onclick="stopSniffing()" style="display: none;">
+                        <i class="bi bi-stop-circle"></i> Stop Capture
+                    </button>
+                </div>
+            </div>
         </div>
 
         {% if packets %}
+        <div class="alert alert-success">
+            <strong>{{ packets|length }} packets</strong> have been captured and stored in the database.
+        </div>
+        
         <div class="table-responsive">
             <table id="packetsTable" class="table table-striped table-bordered">
                 <thead>
@@ -48,8 +108,10 @@
                         <td>{{ packet.timestamp }}</td>
                         <td>{{ packet.src_ip }}</td>
                         <td>{{ packet.dst_ip }}</td>
-                        <td>{{ packet.protocol }}</td>
-                        <td>{{ packet.length }}</td>
+                        <td>
+                            <span class="badge bg-primary">{{ packet.protocol }}</span>
+                        </td>
+                        <td>{{ packet.length }} bytes</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -57,7 +119,15 @@
         </div>
         {% else %}
         <div class="alert alert-info">
-            No packets have been captured yet. Please go back and select an interface to start capturing.
+            <h5>No packets captured yet</h5>
+            <p>To start capturing packets:</p>
+            <ol>
+                <li>Go back to the <a href="/">Interface Selection</a> page</li>
+                <li>Select a network interface</li>
+                <li>Wait for packets to be captured</li>
+                <li>Return here to view the results</li>
+            </ol>
+            <p><strong>Note:</strong> Make sure you have administrator privileges and Npcap installed for packet capture to work properly.</p>
         </div>
         {% endif %}
     </div>
@@ -67,12 +137,94 @@
     <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
     <script>
         $(document).ready(function() {
-            $('#packetsTable').DataTable({
-                order: [[0, 'desc']],
-                pageLength: 25,
-                responsive: true
-            });
+            if (document.getElementById('packetsTable')) {
+                $('#packetsTable').DataTable({
+                    order: [[0, 'desc']],
+                    pageLength: 25,
+                    responsive: true,
+                    language: {
+                        search: "Search packets:",
+                        lengthMenu: "Show _MENU_ packets per page",
+                        info: "Showing _START_ to _END_ of _TOTAL_ packets"
+                    }
+                });
+            }
+            
+            // Check sniffing status
+            checkSniffingStatus();
         });
+
+        function checkSniffingStatus() {
+            fetch('/sniffing_status')
+                .then(response => response.json())
+                .then(data => {
+                    updateStatusDisplay(data);
+                })
+                .catch(error => {
+                    console.error('Error checking status:', error);
+                    updateStatusDisplay({ is_sniffing: false, interface: null, packet_count: 0 });
+                });
+        }
+
+        function updateStatusDisplay(data) {
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            const statusDetails = document.getElementById('statusDetails');
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+
+            if (data.is_sniffing) {
+                statusIndicator.className = 'status-indicator status-active';
+                statusText.textContent = 'Active';
+                statusDetails.textContent = `Capturing on: ${data.interface} | Packets: ${data.packet_count}`;
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
+            } else {
+                statusIndicator.className = 'status-indicator status-inactive';
+                statusText.textContent = 'Inactive';
+                statusDetails.textContent = `No active capture | Total packets: ${data.packet_count}`;
+                startBtn.style.display = 'inline-block';
+                stopBtn.style.display = 'none';
+            }
+        }
+
+        function startSniffing() {
+            // Redirect to interface selection
+            window.location.href = '/';
+        }
+
+        function stopSniffing() {
+            if (confirm('Are you sure you want to stop packet capture?')) {
+                fetch('/stop_sniffing', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert(data.message);
+                        checkSniffingStatus();
+                        // Reload page to refresh packet list
+                        setTimeout(() => {
+                            location.reload();
+                        }, 1000);
+                    } else {
+                        alert(data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error stopping sniffing:', error);
+                    alert('Error stopping packet capture');
+                });
+            }
+        }
+
+        // Refresh status every 30 seconds
+        setInterval(() => {
+            checkSniffingStatus();
+        }, 30000);
     </script>
 </body>
 </html> 
