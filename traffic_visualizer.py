@@ -1,5 +1,9 @@
 import matplotlib.pyplot as plt
+import logging
 from db import get_protocol_stats, get_top_ips
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 def visualize_protocol_distribution():
     """
@@ -10,7 +14,7 @@ def visualize_protocol_distribution():
     protocol_stats = get_protocol_stats()
     
     if not protocol_stats:
-        print("No data found in the database.")
+        logger.warning("No data found in the database.")
         return
 
     # Prepare data for plotting
@@ -41,7 +45,7 @@ def visualize_top_ips(limit=5):
     top_src_ips, top_dst_ips = get_top_ips(limit)
     
     if not top_src_ips and not top_dst_ips:
-        print("No data found in the database.")
+        logger.warning("No data found in the database.")
         return
     
     # Create subplots
@@ -85,9 +89,9 @@ def visualize_top_ips(limit=5):
     plt.show()
 
 if __name__ == "__main__":
-    print("Visualizing protocol distribution...")
+    logger.info("Visualizing protocol distribution...")
     visualize_protocol_distribution()
     
-    print("\nVisualizing top IP addresses...")
+    logger.info("Visualizing top IP addresses...")
     visualize_top_ips()
 

@@ -1,7 +1,11 @@
 import sqlite3
 import time
 import os
+import logging
 from datetime import datetime
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Database file name
 DB_FILE = "packets.db"
@@ -33,7 +37,7 @@ def init_db():
     
     conn.commit()
     conn.close()
-    print(f"Database initialized: {DB_FILE}")
+    logger.info(f"Database initialized: {DB_FILE}")
 
 def insert_packet(packet_data):
     """
@@ -60,7 +64,7 @@ def insert_packet(packet_data):
                    packet_data['length']))
         conn.commit()
     except Exception as e:
-        print(f"Error inserting packet: {e}")
+        logger.error(f"Error inserting packet: {e}")
     finally:
         conn.close()
 
@@ -95,7 +99,7 @@ def get_all_packets(limit=None):
             })
         return packets
     except Exception as e:
-        print(f"Error getting packets: {e}")
+        logger.error(f"Error getting packets: {e}")
         return []
     finally:
         conn.close()
@@ -115,7 +119,7 @@ def get_packet_count():
         count = c.fetchone()[0]
         return count
     except Exception as e:
-        print(f"Error getting packet count: {e}")
+        logger.error(f"Error getting packet count: {e}")
         return 0
     finally:
         conn.close()
@@ -138,7 +142,7 @@ def get_protocol_stats():
             stats[row[0]] = row[1]
         return stats
     except Exception as e:
-        print(f"Error getting protocol stats: {e}")
+        logger.error(f"Error getting protocol stats: {e}")
         return {}
     finally:
         conn.close()
@@ -167,7 +171,7 @@ def get_top_ips(limit=5):
         
         return top_src, top_dst
     except Exception as e:
-        print(f"Error getting top IPs: {e}")
+        logger.error(f"Error getting top IPs: {e}")
         return [], []
     finally:
         conn.close()
@@ -182,9 +186,9 @@ def clear_database():
     try:
         c.execute("DELETE FROM packets")
         conn.commit()
-        print("Database cleared successfully")
+        logger.info("Database cleared successfully")
     except Exception as e:
-        print(f"Error clearing database: {e}")
+        logger.error(f"Error clearing database: {e}")
     finally:
         conn.close()
 
@@ -214,9 +218,9 @@ def migrate_csv_to_db(csv_file="packets_log.csv"):
                            row['protocol'], 
                            int(row['length'])))
         conn.commit()
-        print(f"Migrated data from {csv_file} to database")
+        logger.info(f"Migrated data from {csv_file} to database")
     except Exception as e:
-        print(f"Error migrating CSV to database: {e}")
+        logger.error(f"Error migrating CSV to database: {e}")
     finally:
         conn.close()
 

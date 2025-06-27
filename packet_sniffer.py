@@ -2,17 +2,28 @@ import time
 import platform
 import sys
 import logging
-from scapy.all import sniff, IP, TCP, UDP, ARP, conf, get_if_list
-from scapy.layers.inet import IP, TCP, UDP
-from scapy.layers.l2 import ARP
+from threading import Lock
+from datetime import datetime
+from scapy.all import (
+    sniff, IP, TCP, UDP, ARP, conf, get_if_list,
+    DNS, DNSQR, Raw, IPv6, Ether
+)
+from colorama import Fore, Style
 from db import insert_packet
 
-# Configure logging
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global stop flag for controlling sniffing
+
 stop_sniffing = False
+captured_packets = []
+packet_lock = Lock()
+
+HTTP_PORTS = {80, 8080, 8000, 8888}
+HTTPS_PORTS = {443, 8443}
+DNS_PORT = 53
+
 
 def check_windows_requirements():
     """
@@ -21,34 +32,27 @@ def check_windows_requirements():
     """
     if platform.system() == "Windows":
         try:
-            # First, check if we can import Windows-specific modules
             try:
                 from scapy.arch.windows import get_windows_if_list
                 interfaces = get_windows_if_list()
                 if not interfaces:
                     error_msg = "No network interfaces found. Please install Npcap or WinPcap."
                     logger.error(error_msg)
-                    print(f"ERROR: {error_msg}")
-                    print("Download Npcap from: https://npcap.com/")
+                    logger.error("Download Npcap from: https://npcap.com/")
                     return False, error_msg
                 
                 logger.info(f"Found {len(interfaces)} Windows interfaces")
             except ImportError as e:
                 error_msg = "Scapy Windows support not available."
                 logger.error(f"{error_msg} Import error: {e}")
-                print(f"ERROR: {error_msg}")
-                print("Please install Npcap from: https://npcap.com/")
+                logger.error("Please install Npcap from: https://npcap.com/")
                 return False, error_msg
             
-            # Test L3 socket capability
             try:
-                # Configure for L3 socket usage
                 conf.use_pcap = False
                 conf.use_dnet = False
                 conf.L3socket = None
                 conf.L3socket6 = None
-                
-                # Try to create a simple L3 socket test
                 from scapy.arch.windows import conf as win_conf
                 win_conf.use_pcap = False
                 win_conf.use_dnet = False
@@ -58,13 +62,11 @@ def check_windows_requirements():
                 
             except Exception as e:
                 logger.warning(f"L3 socket test failed: {e}")
-                # Even if L3 socket test fails, we might still be able to capture
                 return True, f"Windows requirements met - {len(interfaces)} interfaces found (L3 test failed but continuing)"
             
         except Exception as e:
             error_msg = f"Unexpected error checking Windows requirements: {e}"
             logger.error(error_msg)
-            print(f"ERROR: {error_msg}")
             return False, error_msg
     return True, "Non-Windows system"
 
@@ -75,23 +77,15 @@ def configure_windows_scapy():
     """
     if platform.system() == "Windows":
         try:
-            # Completely disable pcap and dnet to force L3 socket usage
             conf.use_pcap = False
             conf.use_dnet = False
-            
-            # Force L3 socket usage by setting these to None
-            # This tells Scapy to use L3 sockets instead of trying layer 2
             conf.L3socket = None
             conf.L3socket6 = None
             
             # Disable any layer 2 sniffing attempts
             conf.use_bpf = False
             conf.use_winpcapy = False
-            
-            # Set verbosity to minimum
             conf.verb = 0
-            
-            # Force Windows-specific socket creation
             try:
                 from scapy.arch.windows import conf as win_conf
                 win_conf.use_pcap = False
@@ -117,29 +111,22 @@ def check_interface_availability(interface_name):
         if not available_interfaces:
             return False, "No network interfaces detected"
         
-        # For Windows, be more flexible with interface validation
         if platform.system() == "Windows":
-            # On Windows, if the interface contains DeviceNPF_, assume it's valid
             if "DeviceNPF_" in interface_name:
                 logger.info(f"Windows interface detected: {interface_name}")
                 return True, f"Windows interface '{interface_name}' accepted"
-            
-            # For other Windows interfaces, check if they exist
             if interface_name not in available_interfaces:
                 return False, f"Interface '{interface_name}' not found in available interfaces"
         else:
-            # For non-Windows systems, strict validation
             if interface_name not in available_interfaces:
                 return False, f"Interface '{interface_name}' not found in available interfaces"
         
-        # Try to get IP address for the interface
         try:
             from scapy.all import get_if_addr
             ip = get_if_addr(interface_name)
             if not ip or ip == "127.0.0.1":
                 return False, f"Interface '{interface_name}' has no valid IP address"
         except Exception as e:
-            # On Windows, this might fail but we can still try to use the interface
             if platform.system() == "Windows":
                 logger.warning(f"Cannot get IP for Windows interface '{interface_name}': {e}")
                 return True, f"Windows interface '{interface_name}' (IP check failed but continuing)"
@@ -161,44 +148,156 @@ def write_packet_to_db(packet_info):
         logger.error(f"Error writing packet to database: {e}")
         return False
 
+def inspect_http(payload):
+    """Analyze HTTP traffic"""
+    try:
+        if b'HTTP/' in payload:
+            lines = payload.split(b'\r\n')
+            status_line = lines[0].decode('ascii', errors='replace')
+            return {'type': 'HTTP Response', 'status': status_line}
+        
+        for method in [b'GET', b'POST', b'PUT', b'DELETE', b'HEAD']:
+            if payload.startswith(method):
+                first_line = payload.split(b'\r\n')[0].decode('ascii', errors='replace')
+                return {'type': 'HTTP Request', 'method': first_line.split()[0], 'path': first_line.split()[1]}
+    except Exception as e:
+        logger.error(f"HTTP inspection error: {e}")
+    return None
+
+def inspect_dns(packet):
+    """Analyze DNS traffic"""
+    try:
+        if DNS in packet:
+            dns = packet[DNS]
+            if DNSQR in dns:
+                if dns.qr == 0:  # Query
+                    return {
+                        'type': 'DNS Query',
+                        'query': dns.qd.qname.decode('ascii', errors='replace'),
+                        'qtype': dns.qd.qtype
+                    }
+                else:  # Response
+                    answers = []
+                    if dns.an:
+                        for answer in dns.an:
+                            answers.append({
+                                'type': answer.type,
+                                'data': str(answer.rdata)
+                            })
+                    return {
+                        'type': 'DNS Response',
+                        'query': dns.qd.qname.decode('ascii', errors='replace'),
+                        'answers': answers
+                    }
+    except Exception as e:
+        logger.error(f"DNS inspection error: {e}")
+    return None
+
+def inspect_tls(packet):
+    """Detect TLS/SSL handshakes"""
+    try:
+        if Raw in packet:
+            payload = packet[Raw].load
+            if b'\x16\x03' in payload[:10]:  # TLS handshake
+                return {'type': 'TLS Handshake'}
+            elif b'\x17\x03' in payload[:10]:  # TLS application data
+                return {'type': 'TLS Application Data'}
+    except Exception as e:
+        logger.error(f"TLS inspection error: {e}")
+    return None
+
 def packet_callback(packet):
     """
     Callback function called by sniff() for each captured packet.
     Extracts relevant data and stores it in the database.
     """
     global stop_sniffing
-    
-    # Check if we should stop sniffing
     if stop_sniffing:
         return
     
-    try:
-        packet_info = {}
-        packet_info["timestamp"] = time.time()
-     
+    packet_info = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+        "src_mac": None,
+        "dst_mac": None,
+        "src_ip": None,
+        "dst_ip": None,
+        "protocol": "OTHER",
+        "length": len(packet),
+        "src_port": None,
+        "dst_port": None,
+        "dpi": {} 
+    }
+    
+    try:    
+        # Link layer (Ethernet)
+        if Ether in packet:
+            eth = packet[Ether]
+            packet_info.update({
+                "src_mac": eth.src,
+                "dst_mac": eth.dst
+            })
+
+        # Network layer (IPv4/IPv6)
         if IP in packet:
             ip_layer = packet[IP]
-            packet_info["src_ip"] = ip_layer.src
-            packet_info["dst_ip"] = ip_layer.dst
-            
-            if TCP in packet:
-                packet_info["protocol"] = "TCP"
-            elif UDP in packet:
-                packet_info["protocol"] = "UDP"
-            else:
-                packet_info["protocol"] = "IP"
+            packet_info.update({
+                "src_ip": ip_layer.src,
+                "dst_ip": ip_layer.dst
+            })
+        elif IPv6 in packet:
+            ip_layer = packet[IPv6]
+            packet_info.update({
+                "src_ip": ip_layer.src,
+                "dst_ip": ip_layer.dst,
+                "protocol": "IPv6"
+            })
+
+        # Transport layer
+        if TCP in packet:
+            tcp_layer = packet[TCP]
+            packet_info.update({
+                "protocol": "TCP",
+                "src_port": tcp_layer.sport,
+                "dst_port": tcp_layer.dport
+            })
+
+            # HTTP inspection
+            if tcp_layer.dport in HTTP_PORTS or tcp_layer.sport in HTTP_PORTS:
+                if Raw in packet:
+                    http_info = inspect_http(bytes(packet[Raw]))
+                    if http_info:
+                        packet_info["dpi"]["http"] = http_info
+
+            # TLS inspection
+            elif tcp_layer.dport in HTTPS_PORTS or tcp_layer.sport in HTTPS_PORTS:
+                tls_info = inspect_tls(packet)
+                if tls_info:
+                    packet_info["dpi"]["tls"] = tls_info
+
+        elif UDP in packet:
+            udp_layer = packet[UDP]
+            packet_info.update({
+                "protocol": "UDP",
+                "src_port": udp_layer.sport,
+                "dst_port": udp_layer.dport
+            })
+
+            # DNS inspection
+            if udp_layer.dport == DNS_PORT or udp_layer.sport == DNS_PORT:
+                dns_info = inspect_dns(packet)
+                if dns_info:
+                    packet_info["dpi"]["dns"] = dns_info
+                
         elif ARP in packet:
-            packet_info["src_ip"] = packet[ARP].psrc
-            packet_info["dst_ip"] = packet[ARP].pdst
-            packet_info["protocol"] = "ARP"
-        else:
-            packet_info["src_ip"] = "Unknown"
-            packet_info["dst_ip"] = "Unknown"
-            packet_info["protocol"] = "OTHER"
+            packet_info.update({
+                "protocol": "ARP",
+                "src_ip": packet[ARP].psrc,
+                "dst_ip": packet[ARP].pdst
+            })
+
+        with packet_lock:
+            captured_packets.append(packet_info)
         
-        packet_info["length"] = len(packet)
-        
-        # Store packet in database
         if not write_packet_to_db(packet_info):
             logger.warning("Failed to write packet to database")
             
@@ -216,7 +315,6 @@ def validate_interface(interface):
             logger.error("No network interfaces available")
             return None, "No network interfaces available"
         
-        # If interface is None, use default interface
         if interface is None:
             try:
                 default_iface = conf.iface if hasattr(conf.iface, 'name') else conf.iface
@@ -225,39 +323,26 @@ def validate_interface(interface):
                 logger.error(f"Error getting default interface: {e}")
                 return available_interfaces[0] if available_interfaces else None, "Using first available interface"
         
-        # For Windows, be more flexible
         if platform.system() == "Windows":
-            # If it's a Windows GUID format, accept it
             if "DeviceNPF_" in interface:
                 logger.info(f"Windows GUID interface detected: {interface}")
                 return interface, "Windows GUID interface accepted"
-            
-            # Check if interface exists in available interfaces
             if interface in available_interfaces:
                 return interface, "Interface found"
-            
-            # Try to find a similar one
             for iface in available_interfaces:
                 if interface.lower() in iface.lower():
                     logger.info(f"Found similar interface: {iface} for requested {interface}")
                     return iface, f"Using similar interface: {iface}"
-            
-            # If still not found, return first available interface
             if available_interfaces:
                 logger.warning(f"Interface '{interface}' not found, using first available: {available_interfaces[0]}")
                 return available_interfaces[0], f"Using first available interface: {available_interfaces[0]}"
         else:
-            # For non-Windows systems, strict validation
             if interface in available_interfaces:
                 return interface, "Interface found"
-            
-            # Try to find a similar one
             for iface in available_interfaces:
                 if interface.lower() in iface.lower():
                     logger.info(f"Found similar interface: {iface} for requested {interface}")
                     return iface, f"Using similar interface: {iface}"
-            
-            # If still not found, return first available interface
             if available_interfaces:
                 logger.warning(f"Interface '{interface}' not found, using first available: {available_interfaces[0]}")
                 return available_interfaces[0], f"Using first available interface: {available_interfaces[0]}"
@@ -275,106 +360,82 @@ def start_sniffing(interface=None):
     """
     global stop_sniffing
     
-    # Reset stop flag
     stop_sniffing = False
     
     try:
-        # Check Windows requirements first
         windows_ok, windows_msg = check_windows_requirements()
         if not windows_ok:
             logger.error(f"Windows requirements check failed: {windows_msg}")
             return False
         
-        # Configure Scapy for Windows
         if not configure_windows_scapy():
             logger.error("Failed to configure Scapy for Windows")
             return False
         
-        # Validate and get the correct interface name
         valid_interface, validation_msg = validate_interface(interface)
         if not valid_interface:
             logger.error(f"Interface validation failed: {validation_msg}")
             return False
         
-        # Check interface availability
         interface_ok, interface_msg = check_interface_availability(valid_interface)
         if not interface_ok:
             logger.error(f"Interface availability check failed: {interface_msg}")
             return False
             
         logger.info(f"Starting packet capture on interface: {valid_interface}")
-        print(f"Starting packet capture on interface: {valid_interface}")
         
-        # Configure Scapy based on platform
         if platform.system() == "Windows":
-            # Set the interface
             conf.iface = valid_interface
-            
-            # Try multiple capture methods for Windows, all using L3 sockets
             capture_methods = [
-                # Method 1: Direct L3 socket with minimal configuration
                 lambda: sniff(prn=packet_callback, store=False, stop_filter=lambda p: stop_sniffing),
-                # Method 2: L3 socket with interface specified
                 lambda: sniff(iface=valid_interface, prn=packet_callback, store=False, stop_filter=lambda p: stop_sniffing),
-                # Method 3: L3 socket with IP filter only
                 lambda: sniff(prn=packet_callback, store=False, filter="ip", stop_filter=lambda p: stop_sniffing),
-                # Method 4: L3 socket with interface and IP filter
                 lambda: sniff(iface=valid_interface, prn=packet_callback, store=False, filter="ip", stop_filter=lambda p: stop_sniffing)
             ]
             
             for i, method in enumerate(capture_methods, 1):
                 try:
                     logger.info(f"Attempting Windows L3 capture method {i}...")
-                    print(f"Attempting Windows L3 capture method {i}...")
                     method()
                     logger.info(f"Windows L3 capture method {i} successful")
                     return True
                 except Exception as e:
                     logger.warning(f"Windows L3 capture method {i} failed: {e}")
                     if i == len(capture_methods):
-                        # Last method failed
                         raise e
                     continue
         else:
-            # For non-Windows systems, use standard sniffing
             logger.info("Using standard packet capture...")
             sniff(iface=valid_interface, prn=packet_callback, store=False, stop_filter=lambda p: stop_sniffing)
             
     except KeyboardInterrupt:
         logger.info("Packet capture interrupted by user")
-        print("Packet capture interrupted by user")
         return True
     except Exception as e:
         logger.error(f"Error while sniffing: {e}")
-        print(f"Error while sniffing: {str(e)}")
         
-        # Final fallback for Windows
         if platform.system() == "Windows":
             try:
                 logger.info("Attempting final Windows L3 fallback...")
-                print("Attempting final Windows L3 fallback...")
                 
-                # Reset Scapy configuration to force L3
                 configure_windows_scapy()
                 
-                # Try with absolute minimal configuration - pure L3 socket
-                print("Using pure L3 socket capture (no layer 2)...")
+                logger.info("Using pure L3 socket capture (no layer 2)...")
                 sniff(prn=packet_callback, store=False, stop_filter=lambda p: stop_sniffing)
                 return True
             except Exception as e2:
                 logger.error(f"Final Windows L3 fallback failed: {e2}")
-                print(f"Final Windows L3 fallback failed: {str(e2)}")
-                print("\nTROUBLESHOOTING STEPS:")
-                print("1. Make sure you're running as Administrator")
-                print("2. Check Windows Firewall settings")
-                print("3. Verify Npcap service is running: sc query npcap")
-                print("4. Try restarting your computer")
-                print("5. Reinstall Npcap from https://npcap.com/")
-                print("6. Check if antivirus is blocking packet capture")
+                logger.error("TROUBLESHOOTING STEPS:")
+                logger.error("1. Make sure you're running as Administrator")
+                logger.error("2. Check Windows Firewall settings")
+                logger.error("3. Verify Npcap service is running: sc query npcap")
+                logger.error("4. Try restarting your computer")
+                logger.error("5. Reinstall Npcap from https://npcap.com/")
+                logger.error("6. Check if antivirus is blocking packet capture")
                 return False
         else:
-            print("Please make sure you're running the application with administrator privileges.")
-            print("For Windows users: Install Npcap from https://npcap.com/")
+            logger.error("Please make sure you're running the application with administrator privileges.")
+            logger.error("For Windows users: Install Npcap from https://npcap.com/")
             return False
     
     return True
@@ -386,7 +447,6 @@ def stop_sniffing_capture():
     global stop_sniffing
     stop_sniffing = True
     logger.info("Stopping packet capture...")
-    print("Stopping packet capture...")
 
 def is_sniffing_active():
     """
@@ -394,6 +454,33 @@ def is_sniffing_active():
     """
     global stop_sniffing
     return not stop_sniffing
+
+def get_captured_packets(limit=None, filter_protocol=None):
+    """
+    Get captured packets with optional filtering
+    limit: maximum number of packets to return
+    filter_protocol: only return packets of this protocol (e.g., 'HTTP', 'DNS', 'TLS')
+    """
+    with packet_lock:
+        packets = captured_packets.copy()
+        
+        if filter_protocol:
+            filter_protocol = filter_protocol.upper()
+            packets = [p for p in packets if (
+                (filter_protocol == 'HTTP' and 'http' in p['dpi']) or
+                (filter_protocol == 'DNS' and 'dns' in p['dpi']) or
+                (filter_protocol == 'TLS' and 'tls' in p['dpi']) or
+                (filter_protocol == p['protocol'])
+            )]
+        
+        if limit and len(packets) > limit:
+            return packets[-limit:]
+        return packets
+
+def clear_captured_packets():
+    """Clear all captured packets from memory"""
+    with packet_lock:
+        captured_packets.clear()
 
 def get_sniffing_status():
     """
@@ -406,18 +493,5 @@ def get_sniffing_status():
         'platform': platform.system(),
         'python_version': sys.version
     }
-
-if __name__ == "__main__":
-    try:
-        print("Network Packet Sniffer")
-        print("Press Ctrl+C to stop")
-        start_sniffing()
-    except KeyboardInterrupt:
-        print("\nStopping packet capture...")
-        stop_sniffing_capture()
-    except Exception as e:
-        logger.error(f"Application error: {e}")
-        print(f"Application error: {e}")
-        sys.exit(1)
 
 
