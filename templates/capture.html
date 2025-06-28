@@ -12,7 +12,7 @@
             background-color: #f8f9fa;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             background-color: white;
             padding: 30px;
             border-radius: 10px;
@@ -20,6 +20,10 @@
         }
         .table-responsive {
             margin-top: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
         }
         .nav-buttons {
             margin-bottom: 20px;
@@ -52,6 +56,32 @@
             padding: 15px;
             margin-bottom: 20px;
         }
+        .packets-table {
+            width: 100%;
+            margin-bottom: 0;
+        }
+        .packets-table thead th {
+            position: sticky;
+            top: 0;
+            background-color: #f8f9fa;
+            z-index: 10;
+            border-bottom: 2px solid #dee2e6;
+        }
+        .packets-table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+        .dataTables_wrapper {
+            margin-top: 20px;
+        }
+        .dataTables_length, .dataTables_filter {
+            margin-bottom: 15px;
+        }
+        .dataTables_info, .dataTables_paginate {
+            margin-top: 15px;
+        }
+        .refresh-button {
+            margin-left: 10px;
+        }
     </style>
 </head>
 <body>
@@ -62,6 +92,9 @@
                 <a href="/" class="btn btn-primary">Interface Selection</a>
                 <a href="/dashboard" class="btn btn-info">Dashboard</a>
                 <a href="/visualizations" class="btn btn-success">Visualizations</a>
+                <button class="btn btn-secondary refresh-button" onclick="refreshPackets()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
             </div>
         </div>
 
@@ -89,10 +122,11 @@
         {% if packets %}
         <div class="alert alert-success">
             <strong>{{ packets|length }} packets</strong> have been captured and stored in the database.
+            <small class="d-block mt-1">Scroll down to view all packets or use the search/filter options below.</small>
         </div>
         
         <div class="table-responsive">
-            <table id="packetsTable" class="table table-striped table-bordered">
+            <table id="packetsTable" class="table table-striped table-bordered packets-table">
                 <thead>
                     <tr>
                         <th>Timestamp</th>
@@ -140,19 +174,43 @@
             if (document.getElementById('packetsTable')) {
                 $('#packetsTable').DataTable({
                     order: [[0, 'desc']],
-                    pageLength: 25,
+                    pageLength: 100, // Show more packets per page
+                    lengthMenu: [[25, 50, 100, 250, 500, -1], [25, 50, 100, 250, 500, "All"]], // Allow showing all packets
                     responsive: true,
+                    scrollY: '500px', // Fixed height for scrolling
+                    scrollCollapse: true,
                     language: {
                         search: "Search packets:",
                         lengthMenu: "Show _MENU_ packets per page",
-                        info: "Showing _START_ to _END_ of _TOTAL_ packets"
-                    }
+                        info: "Showing _START_ to _END_ of _TOTAL_ packets",
+                        emptyTable: "No packets found",
+                        zeroRecords: "No packets match your search"
+                    },
+                    dom: '<"top"lf>rt<"bottom"ip><"clear">',
+                    columnDefs: [
+                        {
+                            targets: 0, // Timestamp column
+                            render: function(data, type, row) {
+                                if (type === 'display') {
+                                    // Format timestamp for better readability
+                                    const timestamp = parseFloat(data);
+                                    const date = new Date(timestamp * 1000);
+                                    return date.toLocaleString();
+                                }
+                                return data;
+                            }
+                        }
+                    ]
                 });
             }
             
             // Check sniffing status
             checkSniffingStatus();
         });
+
+        function refreshPackets() {
+            location.reload();
+        }
 
         function checkSniffingStatus() {
             fetch('/sniffing_status')
