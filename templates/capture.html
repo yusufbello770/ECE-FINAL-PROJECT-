@@ -139,7 +139,7 @@
                 <tbody>
                     {% for packet in packets %}
                     <tr>
-                        <td>{{ packet.timestamp }}</td>
+                        <td data-timestamp="{{ packet.timestamp }}">{{ packet.timestamp }}</td>
                         <td>{{ packet.src_ip }}</td>
                         <td>{{ packet.dst_ip }}</td>
                         <td>
@@ -192,10 +192,18 @@
                             targets: 0, // Timestamp column
                             render: function(data, type, row) {
                                 if (type === 'display') {
-                                    // Format timestamp for better readability
                                     const timestamp = parseFloat(data);
+                                    if (isNaN(timestamp) || timestamp === 0) {
+                                        return 'Invalid timestamp';
+                                    }
                                     const date = new Date(timestamp * 1000);
-                                    return date.toLocaleString();
+                                    if (date.getFullYear() === 1970) {
+                                        return 'Invalid timestamp';
+                                    }
+                                    // Format as YYYY-MM-DD HH:MM:SS (no milliseconds)
+                                    const pad = n => n.toString().padStart(2, '0');
+                                    return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} `
+                                        + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
                                 }
                                 return data;
                             }
