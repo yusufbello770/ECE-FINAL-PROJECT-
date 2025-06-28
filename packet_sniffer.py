@@ -216,7 +216,7 @@ def packet_callback(packet):
         return
     
     packet_info = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+        "timestamp": time.time(),
         "src_mac": None,
         "dst_mac": None,
         "src_ip": None,
