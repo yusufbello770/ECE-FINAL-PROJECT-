@@ -1,13 +1,13 @@
-from flask import Flask, render_template, jsonify, request, flash, session
+from flask import Flask, render_template, jsonify, request, flash
 from scapy.all import get_if_list, get_if_addr, conf
 from packet_sniffer import start_sniffing, stop_sniffing_capture, is_sniffing_active, get_captured_packets, validate_interface
 from db import get_all_packets, get_packet_count, get_protocol_stats, get_top_ips, migrate_csv_to_db
 from anomaly_detector import detect_anomalies
+from ip_analyzer import get_ip_info, analyze_traffic_summary, assess_connection_risk
 import threading
 import platform
 import os
 import re
-import json
 import logging
 from datetime import datetime
 import dotenv
@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY")
+app.secret_key = os.environ.get("SECRET_KEY", "your-secret-key-here")
 sniffing_thread = None
 is_sniffing = False
 current_interface = None
@@ -254,28 +254,47 @@ def capture():
         flash("Error loading captured packets. Please try again.", "error")
         return render_template('capture.html', packets=[])
 
-@app.route('/get_packets')
-def get_packets():
-    from packet_sniffer import captured_packets
-    return jsonify(captured_packets)
+@app.route('/clear_database', methods=['POST'])
+def clear_database_route():
+    """Clear all captured packets from database"""
+    try:
+        from db import clear_database
+        clear_database()
+        flash("Database cleared successfully. All captured packets have been removed.", "success")
+        return jsonify({'status': 'success', 'message': 'Database cleared successfully'})
+    except Exception as e:
+        logger.error(f"Error clearing database: {e}")
+        return jsonify({'status': 'error', 'message': f'Error clearing database: {str(e)}'})
 
-@app.route('/packets/http')
-def http_packets():
-    """Get only HTTP packets"""
-    limit = request.args.get('limit', default=50, type=int)
-    return jsonify(get_captured_packets(limit=limit, filter_protocol='HTTP'))
-
-@app.route('/packets/dns')
-def dns_packets():
-    """Get only DNS packets"""
-    limit = request.args.get('limit', default=50, type=int)
-    return jsonify(get_captured_packets(limit=limit, filter_protocol='DNS'))
-
-@app.route('/packets/tls')
-def tls_packets():
-    """Get only TLS packets"""
-    limit = request.args.get('limit', default=50, type=int)
-    return jsonify(get_captured_packets(limit=limit, filter_protocol='TLS'))
+@app.route('/database_stats')
+def database_stats():
+    """Get database statistics"""
+    try:
+        packet_count = get_packet_count()
+        protocol_stats = get_protocol_stats()
+        
+        # Get oldest and newest packet timestamps
+        packets = get_all_packets(limit=1)
+        newest_packet = packets[0]['timestamp'] if packets else None
+        
+        # Get oldest packet
+        import sqlite3
+        conn = sqlite3.connect('packets.db')
+        c = conn.cursor()
+        c.execute("SELECT MIN(timestamp) FROM packets")
+        oldest_timestamp = c.fetchone()[0]
+        conn.close()
+        
+        return jsonify({
+            'total_packets': packet_count,
+            'protocols': protocol_stats,
+            'oldest_packet': oldest_timestamp,
+            'newest_packet': newest_packet,
+            'database_size_mb': os.path.getsize('packets.db') / (1024 * 1024) if os.path.exists('packets.db') else 0
+        })
+    except Exception as e:
+        logger.error(f"Error getting database stats: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/dashboard')
 def dashboard():
@@ -327,6 +346,117 @@ def anomalies():
         logger.error(f"Error detecting anomalies: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/network-analysis')
+def network_analysis():
+    """Render the network analysis page"""
+    try:
+        return render_template('network_analysis.html')
+    except Exception as e:
+        logger.error(f"Error in network analysis route: {e}")
+        flash("Error loading network analysis. Please try again.", "error")
+        return render_template('error.html', error=str(e))
+
+@app.route('/api/network-analysis')
+def api_network_analysis():
+    """Get comprehensive network analysis data"""
+    try:
+        # Get top IPs for analysis
+        top_src_ips, top_dst_ips = get_top_ips(20)
+        
+        # Combine and deduplicate IPs
+        all_ips = {}
+        for ip, count in top_src_ips:
+            if ip:
+                all_ips[ip] = all_ips.get(ip, 0) + count
+        for ip, count in top_dst_ips:
+            if ip:
+                all_ips[ip] = all_ips.get(ip, 0) + count
+        
+        # Convert back to list of tuples
+        combined_ips = list(all_ips.items())
+        
+        # Analyze traffic summary
+        summary = analyze_traffic_summary(combined_ips)
+        
+        # Detailed IP analysis
+        ip_analysis = []
+        for ip, count in sorted(combined_ips, key=lambda x: x[1], reverse=True):
+            if ip:
+                info = get_ip_info(ip)
+                risk_info = assess_connection_risk(info)
+                
+                ip_analysis.append({
+                    'ip': ip,
+                    'packet_count': count,
+                    'type': info['type'],
+                    'organization': info['organization'],
+                    'description': info['description'],
+                    'hostname': info.get('hostname'),
+                    'is_private': info['is_private'],
+                    'risk_level': risk_info['level'],
+                    'risk_icon': risk_info['icon'],
+                    'risk_message': risk_info['message'],
+                    'risk_color': risk_info['color']
+                })
+        
+        # Generate conclusion
+        conclusion = generate_traffic_conclusion(summary, ip_analysis)
+        
+        return jsonify({
+            'summary': summary,
+            'risk_assessment': summary['risk_summary'],
+            'service_analysis': summary['service_types'],
+            'organization_analysis': summary['organizations'],
+            'ip_analysis': ip_analysis,
+            'conclusion': conclusion
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in network analysis API: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def generate_traffic_conclusion(summary, ip_analysis):
+    """Generate traffic analysis conclusion"""
+    conclusion = {
+        'is_normal': True,
+        'message': '',
+        'recommendations': []
+    }
+    
+    # Analyze patterns
+    total_ips = summary['total_ips']
+    external_ips = summary['external_ips']
+    high_risk_count = summary['risk_summary'].get('high', 0)
+    medium_risk_count = summary['risk_summary'].get('medium', 0)
+    
+    # Determine if traffic is normal
+    if high_risk_count > 0:
+        conclusion['is_normal'] = False
+        conclusion['message'] = f"Detected {high_risk_count} high-risk IP addresses that require immediate attention."
+        conclusion['recommendations'].append("Investigate high-risk IP addresses immediately")
+        conclusion['recommendations'].append("Consider blocking suspicious traffic")
+    elif medium_risk_count > 3:
+        conclusion['is_normal'] = False
+        conclusion['message'] = f"Multiple medium-risk connections detected ({medium_risk_count} IPs). Review recommended."
+        conclusion['recommendations'].append("Review medium-risk IP addresses")
+        conclusion['recommendations'].append("Monitor traffic patterns closely")
+    elif external_ips > 15:
+        conclusion['message'] = f"High number of external connections ({external_ips} IPs). This may be normal for active internet usage."
+        conclusion['recommendations'].append("Monitor for unusual spikes in external connections")
+    else:
+        conclusion['message'] = f"Network traffic appears normal. {total_ips} unique IPs detected with typical service patterns."
+        conclusion['recommendations'].append("Continue regular monitoring")
+    
+    # Add service-specific recommendations
+    service_types = summary['service_types']
+    if 'Unknown' in service_types and service_types['Unknown'] > 5:
+        conclusion['recommendations'].append("Investigate unknown service connections")
+    
+    if 'Cloud Server' in service_types and service_types['Cloud Server'] > 50:
+        conclusion['recommendations'].append("High cloud server activity detected - verify legitimate usage")
+    
+    return conclusion
+
 @app.route('/visualizations')
 def visualizations():
     """Render the visualizations page"""
@@ -336,19 +466,6 @@ def visualizations():
         logger.error(f"Error in visualizations route: {e}")
         flash("Error loading visualizations. Please try again.", "error")
         return render_template('error.html', error=str(e))
-
-@app.route('/api/protocol-data')
-def protocol_data():
-    """Get protocol data for visualizations"""
-    try:
-        protocol_stats = get_protocol_stats()
-        return jsonify({
-            'protocols': list(protocol_stats.keys()),
-            'counts': list(protocol_stats.values())
-        })
-    except Exception as e:
-        logger.error(f"Error getting protocol data: {e}")
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/ip-data')
 def ip_data():
@@ -370,6 +487,99 @@ def ip_data():
     except Exception as e:
         logger.error(f"Error getting IP data: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/protocol-data')
+def protocol_data():
+    """Get protocol data for visualizations"""
+    try:
+        protocol_stats = get_protocol_stats()
+        return jsonify({
+            'protocols': list(protocol_stats.keys()),
+            'counts': list(protocol_stats.values())
+        })
+    except Exception as e:
+        logger.error(f"Error getting protocol data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ip-analysis')
+def ip_analysis():
+    """Get detailed IP analysis for visualizations"""
+    try:
+        limit = request.args.get('limit', 10, type=int)
+        
+        if limit < 1 or limit > 50:
+            return jsonify({'error': 'Limit must be between 1 and 50'}), 400
+        
+        top_src_ips, top_dst_ips = get_top_ips(limit)
+        
+        # Analyze source IPs
+        src_analysis = []
+        for ip, count in top_src_ips:
+            if ip:
+                info = get_ip_info(ip)
+                risk = assess_connection_risk(info)
+                src_analysis.append({
+                    'ip': ip,
+                    'count': count,
+                    'type': info['type'],
+                    'organization': info['organization'],
+                    'description': info['description'],
+                    'hostname': info['hostname'],
+                    'is_private': info['is_private'],
+                    'risk': risk
+                })
+        
+        # Analyze destination IPs
+        dst_analysis = []
+        for ip, count in top_dst_ips:
+            if ip:
+                info = get_ip_info(ip)
+                risk = assess_connection_risk(info)
+                dst_analysis.append({
+                    'ip': ip,
+                    'count': count,
+                    'type': info['type'],
+                    'organization': info['organization'],
+                    'description': info['description'],
+                    'hostname': info['hostname'],
+                    'is_private': info['is_private'],
+                    'risk': risk
+                })
+        
+        # Get traffic summary
+        all_ips = top_src_ips + top_dst_ips
+        summary = analyze_traffic_summary(all_ips)
+        
+        return jsonify({
+            'source_ips': src_analysis,
+            'destination_ips': dst_analysis,
+            'summary': summary
+        })
+        
+    except ValueError:
+        return jsonify({'error': 'Invalid limit value'}), 400
+    except Exception as e:
+        logger.error(f"Error getting IP analysis: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ip-info/<ip>')
+def get_single_ip_info(ip):
+    """Get detailed information about a specific IP address"""
+    try:
+        info = get_ip_info(ip)
+        risk = assess_connection_risk(info)
+        
+        return jsonify({
+            'ip': ip,
+            'info': info,
+            'risk': risk
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting info for IP {ip}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 
 @app.route('/debug/interfaces')
 def debug_interfaces():

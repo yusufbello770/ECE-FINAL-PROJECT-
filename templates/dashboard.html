@@ -75,25 +75,36 @@
             <div>
                 <a href="/" class="btn btn-primary">Interface Selection</a>
                 <a href="/capture" class="btn btn-secondary">View Packets</a>
+                <a href="/network-analysis" class="btn btn-warning">Network Analysis</a>
             </div>
         </div>
 
         <!-- Control Panel -->
         <div class="control-panel">
             <div class="row align-items-center">
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <h5 class="mb-0">
                         <span class="status-indicator" id="statusIndicator"></span>
                         <span id="statusText">Checking status...</span>
                     </h5>
                     <small id="statusDetails" class="text-muted"></small>
                 </div>
-                <div class="col-md-6 text-end">
+                <div class="col-md-4 text-center">
+                    <div id="databaseInfo">
+                        <small class="text-muted">Database: <span id="dbPacketCount">-</span> packets</small>
+                        <br>
+                        <small class="text-muted">Size: <span id="dbSize">-</span> MB</small>
+                    </div>
+                </div>
+                <div class="col-md-4 text-end">
                     <button class="btn btn-success" id="startBtn" onclick="startSniffing()" style="display: none;">
                         <i class="bi bi-play-circle"></i> Start Capture
                     </button>
                     <button class="btn btn-danger" id="stopBtn" onclick="stopSniffing()" style="display: none;">
                         <i class="bi bi-stop-circle"></i> Stop Capture
+                    </button>
+                    <button class="btn btn-warning" onclick="clearDatabase()" title="Clear all captured data">
+                        <i class="bi bi-trash"></i> Clear Data
                     </button>
                 </div>
             </div>
@@ -250,11 +261,51 @@
         // Load initial data
         document.addEventListener('DOMContentLoaded', function() {
             checkSniffingStatus();
+            loadDatabaseStats();
             loadStats();
             loadProtocolData();
             loadIPData();
             detectAnomalies();
         });
+
+        function loadDatabaseStats() {
+            fetch('/database_stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('dbPacketCount').textContent = data.total_packets;
+                    document.getElementById('dbSize').textContent = data.database_size_mb.toFixed(2);
+                })
+                .catch(error => console.error('Error loading database stats:', error));
+        }
+
+        function clearDatabase() {
+            if (confirm('Are you sure you want to clear all captured packet data? This cannot be undone.')) {
+                fetch('/clear_database', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('Database cleared successfully!');
+                        // Refresh all data
+                        loadDatabaseStats();
+                        loadStats();
+                        loadProtocolData();
+                        loadIPData();
+                        detectAnomalies();
+                    } else {
+                        alert('Error: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error clearing database:', error);
+                    alert('Error clearing database');
+                });
+            }
+        }
 
         function checkSniffingStatus() {
             fetch('/sniffing_status')

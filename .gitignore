@@ -1,5 +1,7 @@
 .venv
+.linux_venv
 /venv
 .env
+.vscode
 .pyc
 __pycache__

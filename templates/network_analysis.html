@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Analysis - Packet Sniffer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1400px;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .analysis-card {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background-color: #fff;
+        }
+        .ip-card {
+            border-left: 4px solid #007bff;
+            margin-bottom: 15px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 0 8px 8px 0;
+        }
+        .ip-card.local {
+            border-left-color: #28a745;
+        }
+        .ip-card.external {
+            border-left-color: #17a2b8;
+        }
+        .ip-card.suspicious {
+            border-left-color: #dc3545;
+        }
+        .risk-badge {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .nav-buttons {
+            margin-bottom: 20px;
+        }
+        .nav-buttons .btn {
+            margin-right: 10px;
+        }
+        .refresh-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .hostname-info {
+            font-size: 0.9rem;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        .service-type-badge {
+            font-size: 0.75rem;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>🔍 Network Analysis</h1>
+            <div class="nav-buttons">
+                <a href="/" class="btn btn-primary">Interface Selection</a>
+                <a href="/dashboard" class="btn btn-info">Dashboard</a>
+                <a href="/capture" class="btn btn-secondary">View Packets</a>
+                <a href="/visualizations" class="btn btn-success">Visualizations</a>
+            </div>
+        </div>
+
+        <!-- Summary Statistics -->
+        <div class="analysis-card">
+            <h3>📊 Traffic Summary</h3>
+            <div class="stats-grid" id="summaryStats">
+                <div class="stat-card">
+                    <h4 id="totalIPs">-</h4>
+                    <p>Unique IP Addresses</p>
+                </div>
+                <div class="stat-card">
+                    <h4 id="localIPs">-</h4>
+                    <p>Local Network IPs</p>
+                </div>
+                <div class="stat-card">
+                    <h4 id="externalIPs">-</h4>
+                    <p>External Service IPs</p>
+                </div>
+                <div class="stat-card">
+                    <h4 id="serviceTypes">-</h4>
+                    <p>Service Types</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Assessment -->
+        <div class="analysis-card">
+            <h3>🛡️ Security Assessment</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="chart-container">
+                        <canvas id="riskChart"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div id="riskSummary">
+                        <div class="alert alert-info">
+                            <strong>Loading risk assessment...</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Service Types Analysis -->
+        <div class="analysis-card">
+            <h3>🌐 Service Types</h3>
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="chart-container">
+                        <canvas id="serviceChart"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div id="serviceList">
+                        <!-- Service types will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed IP Analysis -->
+        <div class="analysis-card">
+            <h3>🔍 Detailed IP Analysis</h3>
+            <div class="mb-3">
+                <input type="text" class="form-control" id="ipSearch" placeholder="Search IP addresses...">
+            </div>
+            <div id="ipAnalysis">
+                <!-- IP analysis will be populated here -->
+            </div>
+        </div>
+
+        <!-- Organizations Analysis -->
+        <div class="analysis-card">
+            <h3>🏢 Organizations</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="chart-container">
+                        <canvas id="orgChart"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div id="orgList">
+                        <!-- Organizations will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Traffic Patterns -->
+        <div class="analysis-card">
+            <h3>📈 Traffic Patterns</h3>
+            <div class="alert alert-info">
+                <h5>🎯 Analysis Results</h5>
+                <div id="trafficConclusion">
+                    <p>Loading traffic analysis...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Refresh Button -->
+    <button class="btn btn-primary refresh-btn" onclick="refreshAnalysis()">
+        <i class="bi bi-arrow-clockwise"></i> Refresh
+    </button>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let riskChart, serviceChart, orgChart;
+        let analysisData = {};
+
+        // Load analysis data when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            loadNetworkAnalysis();
+        });
+
+        function loadNetworkAnalysis() {
+            fetch('/api/network-analysis')
+                .then(response => response.json())
+                .then(data => {
+                    analysisData = data;
+                    updateSummaryStats(data.summary);
+                    updateRiskAssessment(data.risk_assessment);
+                    updateServiceAnalysis(data.service_analysis);
+                    updateIPAnalysis(data.ip_analysis);
+                    updateOrganizationAnalysis(data.organization_analysis);
+                    updateTrafficConclusion(data.conclusion);
+                })
+                .catch(error => {
+                    console.error('Error loading network analysis:', error);
+                    showError('Failed to load network analysis data');
+                });
+        }
+
+        function updateSummaryStats(summary) {
+            document.getElementById('totalIPs').textContent = summary.total_ips;
+            document.getElementById('localIPs').textContent = summary.local_ips;
+            document.getElementById('externalIPs').textContent = summary.external_ips;
+            document.getElementById('serviceTypes').textContent = Object.keys(summary.service_types).length;
+        }
+
+        function updateRiskAssessment(riskData) {
+            // Create risk chart
+            const ctx = document.getElementById('riskChart').getContext('2d');
+            if (riskChart) riskChart.destroy();
+            
+            riskChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Safe', 'Low Risk', 'Medium Risk', 'High Risk'],
+                    datasets: [{
+                        data: [
+                            riskData.safe || 0,
+                            riskData.low || 0,
+                            riskData.medium || 0,
+                            riskData.high || 0
+                        ],
+                        backgroundColor: ['#28a745', '#17a2b8', '#ffc107', '#dc3545']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            // Update risk summary
+            const riskSummary = document.getElementById('riskSummary');
+            let riskHtml = '';
+            
+            if (riskData.high > 0) {
+                riskHtml += `<div class="alert alert-danger">🚨 <strong>${riskData.high}</strong> high-risk IPs detected</div>`;
+            }
+            if (riskData.medium > 0) {
+                riskHtml += `<div class="alert alert-warning">⚠️ <strong>${riskData.medium}</strong> medium-risk IPs detected</div>`;
+            }
+            if (riskData.safe > 0) {
+                riskHtml += `<div class="alert alert-success">✅ <strong>${riskData.safe}</strong> safe IPs identified</div>`;
+            }
+            if (riskData.low > 0) {
+                riskHtml += `<div class="alert alert-info">ℹ️ <strong>${riskData.low}</strong> low-risk IPs detected</div>`;
+            }
+
+            riskSummary.innerHTML = riskHtml || '<div class="alert alert-info">No risk data available</div>';
+        }
+
+        function updateServiceAnalysis(serviceData) {
+            // Create service chart
+            const ctx = document.getElementById('serviceChart').getContext('2d');
+            if (serviceChart) serviceChart.destroy();
+            
+            const labels = Object.keys(serviceData);
+            const data = Object.values(serviceData);
+            
+            serviceChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Packet Count',
+                        data: data,
+                        backgroundColor: 'rgba(54, 162, 235, 0.8)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // Update service list
+            const serviceList = document.getElementById('serviceList');
+            let serviceHtml = '<h5>Service Breakdown:</h5>';
+            
+            for (const [service, count] of Object.entries(serviceData)) {
+                const percentage = ((count / Object.values(serviceData).reduce((a, b) => a + b, 0)) * 100).toFixed(1);
+                serviceHtml += `
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="badge bg-primary service-type-badge">${service}</span>
+                        <span><strong>${count}</strong> packets (${percentage}%)</span>
+                    </div>
+                `;
+            }
+            
+            serviceList.innerHTML = serviceHtml;
+        }
+
+        function updateIPAnalysis(ipData) {
+            const ipAnalysis = document.getElementById('ipAnalysis');
+            let ipHtml = '';
+            
+            ipData.forEach(ip => {
+                const riskColor = getRiskColor(ip.risk_level);
+                const cardClass = ip.is_private ? 'local' : 'external';
+                
+                ipHtml += `
+                    <div class="ip-card ${cardClass}">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <h6 class="mb-1">
+                                    <strong>${ip.ip}</strong>
+                                    <span class="badge bg-${riskColor} risk-badge ms-2">${ip.risk_icon} ${ip.risk_message}</span>
+                                </h6>
+                                <p class="mb-1">
+                                    <span class="badge bg-secondary service-type-badge">${ip.type}</span>
+                                    <strong>${ip.organization}</strong>
+                                </p>
+                                <p class="mb-1 text-muted">${ip.description}</p>
+                                ${ip.hostname ? `<div class="hostname-info">🌐 ${ip.hostname}</div>` : ''}
+                            </div>
+                            <div class="text-end">
+                                <span class="badge bg-primary">${ip.packet_count} packets</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            ipAnalysis.innerHTML = ipHtml || '<p class="text-muted">No IP data available</p>';
+        }
+
+        function updateOrganizationAnalysis(orgData) {
+            // Create organization chart
+            const ctx = document.getElementById('orgChart').getContext('2d');
+            if (orgChart) orgChart.destroy();
+            
+            const labels = Object.keys(orgData);
+            const data = Object.values(orgData);
+            
+            orgChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: [
+                            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+                            '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#FF6384'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            // Update organization list
+            const orgList = document.getElementById('orgList');
+            let orgHtml = '<h5>Organizations:</h5>';
+            
+            for (const [org, count] of Object.entries(orgData)) {
+                const percentage = ((count / Object.values(orgData).reduce((a, b) => a + b, 0)) * 100).toFixed(1);
+                orgHtml += `
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>${org}</span>
+                        <span><strong>${count}</strong> packets (${percentage}%)</span>
+                    </div>
+                `;
+            }
+            
+            orgList.innerHTML = orgHtml;
+        }
+
+        function updateTrafficConclusion(conclusion) {
+            const conclusionDiv = document.getElementById('trafficConclusion');
+            let conclusionHtml = '';
+            
+            if (conclusion.is_normal) {
+                conclusionHtml += `
+                    <div class="alert alert-success">
+                        <h6>✅ Network Traffic Assessment: NORMAL</h6>
+                        <p>${conclusion.message}</p>
+                    </div>
+                `;
+            } else {
+                conclusionHtml += `
+                    <div class="alert alert-warning">
+                        <h6>⚠️ Network Traffic Assessment: REVIEW NEEDED</h6>
+                        <p>${conclusion.message}</p>
+                    </div>
+                `;
+            }
+            
+            if (conclusion.recommendations && conclusion.recommendations.length > 0) {
+                conclusionHtml += '<h6>💡 Recommendations:</h6><ul>';
+                conclusion.recommendations.forEach(rec => {
+                    conclusionHtml += `<li>${rec}</li>`;
+                });
+                conclusionHtml += '</ul>';
+            }
+            
+            conclusionDiv.innerHTML = conclusionHtml;
+        }
+
+        function getRiskColor(riskLevel) {
+            switch(riskLevel) {
+                case 'safe': return 'success';
+                case 'low': return 'info';
+                case 'medium': return 'warning';
+                case 'high': return 'danger';
+                default: return 'secondary';
+            }
+        }
+
+        function refreshAnalysis() {
+            const btn = document.querySelector('.refresh-btn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Refreshing...';
+            btn.disabled = true;
+            
+            loadNetworkAnalysis();
+            
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }, 2000);
+        }
+
+        function showError(message) {
+            const container = document.querySelector('.container');
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'alert alert-danger alert-dismissible fade show';
+            errorDiv.innerHTML = `
+                <strong>Error:</strong> ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            container.insertBefore(errorDiv, container.firstChild);
+        }
+
+        // IP Search functionality
+        document.getElementById('ipSearch').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            const ipCards = document.querySelectorAll('.ip-card');
+            
+            ipCards.forEach(card => {
+                const ipText = card.textContent.toLowerCase();
+                if (ipText.includes(searchTerm)) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        });
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => {
+            loadNetworkAnalysis();
+        }, 30000);
+    </script>
+</body>
+</html>

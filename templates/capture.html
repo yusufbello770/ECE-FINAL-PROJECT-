@@ -91,6 +91,7 @@
             <div class="nav-buttons">
                 <a href="/" class="btn btn-primary">Interface Selection</a>
                 <a href="/dashboard" class="btn btn-info">Dashboard</a>
+                <a href="/network-analysis" class="btn btn-warning">Network Analysis</a>
                 <a href="/visualizations" class="btn btn-success">Visualizations</a>
                 <button class="btn btn-secondary refresh-button" onclick="refreshPackets()">
                     <i class="bi bi-arrow-clockwise"></i> Refresh
@@ -115,6 +116,9 @@
                     <button class="btn btn-danger" id="stopBtn" onclick="stopSniffing()" style="display: none;">
                         <i class="bi bi-stop-circle"></i> Stop Capture
                     </button>
+                    <button class="btn btn-warning" onclick="clearDatabase()" title="Clear all captured data">
+                        <i class="bi bi-trash"></i> Clear Data
+                    </button>
                 </div>
             </div>
         </div>
@@ -133,19 +137,29 @@
                         <th>Source IP</th>
                         <th>Destination IP</th>
                         <th>Protocol</th>
+                        <th>Ports</th>
                         <th>Length</th>
+                        <th>Info</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for packet in packets %}
                     <tr>
                         <td data-timestamp="{{ packet.timestamp }}">{{ packet.timestamp }}</td>
-                        <td>{{ packet.src_ip }}</td>
-                        <td>{{ packet.dst_ip }}</td>
+                        <td>{{ packet.src_ip or 'N/A' }}</td>
+                        <td>{{ packet.dst_ip or 'N/A' }}</td>
                         <td>
                             <span class="badge bg-primary">{{ packet.protocol }}</span>
                         </td>
+                        <td>
+                            {% if packet.src_port and packet.dst_port %}
+                                {{ packet.src_port }} → {{ packet.dst_port }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
                         <td>{{ packet.length }} bytes</td>
+                        <td>{{ packet.info or '' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -283,6 +297,31 @@
                 .catch(error => {
                     console.error('Error stopping sniffing:', error);
                     alert('Error stopping packet capture');
+                });
+            }
+        }
+
+        function clearDatabase() {
+            if (confirm('Are you sure you want to clear all captured packet data? This cannot be undone.')) {
+                fetch('/clear_database', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('Database cleared successfully!');
+                        // Reload page to refresh packet list
+                        location.reload();
+                    } else {
+                        alert('Error: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error clearing database:', error);
+                    alert('Error clearing database');
                 });
             }
         }
